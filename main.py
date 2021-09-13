@@ -13,11 +13,13 @@ from model import Model
 
 import torchvision
 
+
 def off_diagonal(x):
     # return a flattened view of the off-diagonal elements of a square matrix
     n, m = x.shape
     assert n == m
     return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
+
 
 # train for one epoch to learn unique features
 def train(net, data_loader, train_optimizer):
@@ -29,11 +31,11 @@ def train(net, data_loader, train_optimizer):
         feature_1, out_1 = net(pos_1)
         feature_2, out_2 = net(pos_2)
         # Barlow Twins
-        
+
         # normalize the representations along the batch dimension
         out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0)
         out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0)
-        
+
         # cross-correlation matrix
         c = torch.matmul(out_1_norm.T, out_2_norm) / batch_size
 
@@ -48,7 +50,6 @@ def train(net, data_loader, train_optimizer):
             # encouraging off_diag to be negative ones
             off_diag = off_diagonal(c).add_(1).pow_(2).sum()
         loss = on_diag + lmbda * off_diag
-        
 
         train_optimizer.zero_grad()
         loss.backward()
@@ -60,8 +61,9 @@ def train(net, data_loader, train_optimizer):
             off_corr = -1
         else:
             off_corr = 0
-        train_bar.set_description('Train Epoch: [{}/{}] Loss: {:.4f} off_corr:{} lmbda:{:.4f} bsz:{} f_dim:{} dataset: {}'.format(\
-                                epoch, epochs, total_loss / total_num, off_corr, lmbda, batch_size, feature_dim, dataset))
+        train_bar.set_description(
+            'Train Epoch: [{}/{}] Loss: {:.4f} off_corr:{} lmbda:{:.4f} bsz:{} f_dim:{} dataset: {}'.format( \
+                epoch, epochs, total_loss / total_num, off_corr, lmbda, batch_size, feature_dim, dataset))
     return total_loss / total_num
 
 
@@ -121,48 +123,50 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', default=512, type=int, help='Number of images in each mini-batch')
     parser.add_argument('--epochs', default=1000, type=int, help='Number of sweeps over the dataset to train')
     # for barlow twins
-    
-    parser.add_argument('--lmbda', default=0.005, type=float, help='Lambda that controls the on- and off-diagonal terms')
+
+    parser.add_argument('--lmbda', default=0.005, type=float,
+                        help='Lambda that controls the on- and off-diagonal terms')
     parser.add_argument('--corr_neg_one', dest='corr_neg_one', action='store_true')
     parser.add_argument('--corr_zero', dest='corr_neg_one', action='store_false')
     parser.set_defaults(corr_neg_one=False)
-    
 
     # args parse
     args = parser.parse_args()
     dataset = args.dataset
     feature_dim, temperature, k = args.feature_dim, args.temperature, args.k
     batch_size, epochs = args.batch_size, args.epochs
-    
-    
+
     lmbda = args.lmbda
     corr_neg_one = args.corr_neg_one
-    
+
     # data prepare
     if dataset == 'cifar10':
-        train_data = torchvision.datasets.CIFAR10(root='data', train=True, \
-                                                  transform=utils.CifarPairTransform(train_transform = True), download=True)
-        memory_data = torchvision.datasets.CIFAR10(root='data', train=True, \
-                                                  transform=utils.CifarPairTransform(train_transform = False), download=True)
-        test_data = torchvision.datasets.CIFAR10(root='data', train=False, \
-                                                  transform=utils.CifarPairTransform(train_transform = False), download=True)
+        train_data = torchvision.datasets.CIFAR10(root='data', train=True,
+                                                  transform=utils.CifarPairTransform(train_transform=True),
+                                                  download=True)
+        memory_data = torchvision.datasets.CIFAR10(root='data', train=True,
+                                                   transform=utils.CifarPairTransform(train_transform=False),
+                                                   download=True)
+        test_data = torchvision.datasets.CIFAR10(root='data', train=False,
+                                                 transform=utils.CifarPairTransform(train_transform=False),
+                                                 download=True)
     elif dataset == 'stl10':
-        train_data = torchvision.datasets.STL10(root='data', split="train+unlabeled", \
-                                                  transform=utils.StlPairTransform(train_transform = True), download=True)
-        memory_data = torchvision.datasets.STL10(root='data', split="train", \
-                                                  transform=utils.StlPairTransform(train_transform = False), download=True)
-        test_data = torchvision.datasets.STL10(root='data', split="test", \
-                                                  transform=utils.StlPairTransform(train_transform = False), download=True)
+        train_data = torchvision.datasets.STL10(root='data', split="train+unlabeled",
+                                                transform=utils.StlPairTransform(train_transform=True), download=True)
+        memory_data = torchvision.datasets.STL10(root='data', split="train",
+                                                 transform=utils.StlPairTransform(train_transform=False), download=True)
+        test_data = torchvision.datasets.STL10(root='data', split="test",
+                                               transform=utils.StlPairTransform(train_transform=False), download=True)
     elif dataset == 'tiny_imagenet':
-        train_data = torchvision.datasets.ImageFolder('data/tiny-imagenet-200/train', \
-                                                      utils.TinyImageNetPairTransform(train_transform = True))
-        memory_data = torchvision.datasets.ImageFolder('data/tiny-imagenet-200/train', \
-                                                      utils.TinyImageNetPairTransform(train_transform = False))
-        test_data = torchvision.datasets.ImageFolder('data/tiny-imagenet-200/val', \
-                                                      utils.TinyImageNetPairTransform(train_transform = False))
-    
+        train_data = torchvision.datasets.ImageFolder('data/tiny-imagenet-200/train',
+                                                      utils.TinyImageNetPairTransform(train_transform=True))
+        memory_data = torchvision.datasets.ImageFolder('data/tiny-imagenet-200/train',
+                                                       utils.TinyImageNetPairTransform(train_transform=False))
+        test_data = torchvision.datasets.ImageFolder('data/tiny-imagenet-200/val',
+                                                     utils.TinyImageNetPairTransform(train_transform=False))
+
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=16, pin_memory=True,
-                            drop_last=True)
+                              drop_last=True)
     memory_loader = DataLoader(memory_data, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True)
     test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True)
 
@@ -185,7 +189,7 @@ if __name__ == '__main__':
     else:
         corr_neg_one_str = ''
     save_name_pre = '{}{}_{}_{}_{}'.format(corr_neg_one_str, lmbda, feature_dim, batch_size, dataset)
-    
+
     if not os.path.exists('results'):
         os.mkdir('results')
     best_acc = 0.0

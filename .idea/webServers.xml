@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="6215dacb-0411-4760-abbe-7fd08f4b7577" name="mit">
+        <fileTransfer rootFolder="/afs/csail.mit.edu/u/h/hehaodele" accessType="SFTP" host="login.csail.mit.edu" port="22" sshConfigId="6475e30c-97b9-4b7d-bef7-7c5da06b0d93" sshConfig="hehaodele@login.csail.mit.edu:22 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
