@@ -20,6 +20,87 @@ def off_diagonal(x):
     assert n == m
     return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
+def forwardLossBT(out_1, out_2, off_goal):
+    # Barlow Twins
+    # normalize the representations along the batch dimension
+    out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0)  # seems unbiased is better
+    out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0)
+    batch_size = len(out_1_norm)
+
+    # cross-correlation matrix
+    c = torch.matmul(out_1_norm.T, out_2_norm) / batch_size
+
+    # loss
+    on_diag = torch.diagonal(c).add_(-1).pow_(2).sum()
+    off_diag = off_diagonal(c).sub_(off_goal).pow_(2).sum()
+    loss = on_diag + lmbda * off_diag
+    return loss
+
+def forwardLossBT2(out_1, out_2):
+    # Barlow Twins
+    # normalize the representations along the batch dimension
+    out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0)  # seems unbiased is better
+    out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0)
+    batch_size = len(out_1_norm)
+
+    # cross-correlation matrix
+    c = torch.matmul(out_1_norm.T, out_2_norm) / batch_size
+
+    # loss
+    on_diag = torch.diagonal(c).pow_(2).sum()
+    off_diag = off_diagonal(c).pow_(2).sum()
+    loss = - on_diag - lmbda * off_diag
+    return loss
+
+def calcHSIC(out_1_norm, out_2_norm):
+    batch_size, out_1_dim = out_1_norm.shape
+    batch_size, out_2_dim = out_2_norm.shape
+
+    K = torch.cdist(out_1_norm[None,:,:], out_1_norm[None,:,:], p=2)[0] / out_1_dim
+    L = torch.cdist(out_2_norm[None, :, :], out_2_norm[None, :, :], p=2)[0] / out_2_dim
+
+    K_med = torch.median(K.reshape(-1).detach())
+    L_med = torch.median(L.reshape(-1).detach())
+
+    # print('K med', torch.median(K.reshape(-1)), 'L med', torch.median(L.reshape(-1)))
+    # median is about 0.07
+    # do RBF kernel
+    K = torch.exp(-K / K_med)
+    L = torch.exp(-L / L_med)
+    n = len(K)
+    H = torch.eye(n).to(K.dtype).to(K.device) - torch.ones_like(K) / n
+    HSIC = torch.trace(torch.matmul(torch.matmul(K,H),torch.matmul(L,H))) / (n*n)
+    return HSIC
+
+def forwardLossHSIC(out_1, out_2):
+    out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0)  # seems unbiased is better
+    out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0)
+    loss = -calcHSIC(out_1_norm, out_2_norm)
+    return loss
+
+def forwardLossHSIC2(out_1, out_2):
+    out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0)  # seems unbiased is better
+    out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0)
+
+    # loss_align = (out_1_norm * out_2_norm).mean(0).add_(-1).pow(2).mean() # (cii - 1)^2
+
+    mask_1 = torch.rand_like(out_1_norm[0]) > 0.5
+    mask_2 = torch.rand_like(out_2_norm[0]) > 0.5
+    mask_1[0] = True
+    mask_1[-1] = False
+    mask_2[0] = True
+    mask_2[-1] = False
+
+    hsic_1 = calcHSIC(out_1_norm[:,mask_1], out_1_norm[:,~mask_1])
+    hsic_2 = calcHSIC(out_2_norm[:, mask_1], out_2_norm[:, ~mask_1])
+
+    loss_uniform = 0.5 * (hsic_1 + hsic_2)
+
+    # print('align', loss_align, 'uniform', loss_uniform)
+    # loss = loss_align + loss_uniform * 10
+    return loss_uniform
+
+
 
 # train for one epoch to learn unique features
 def train(net, data_loader, train_optimizer):
@@ -30,26 +111,23 @@ def train(net, data_loader, train_optimizer):
         pos_1, pos_2 = pos_1.cuda(non_blocking=True), pos_2.cuda(non_blocking=True)
         feature_1, out_1 = net(pos_1)
         feature_2, out_2 = net(pos_2)
-        # Barlow Twins
 
-        # normalize the representations along the batch dimension
-        out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0)
-        out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0)
-
-        # cross-correlation matrix
-        c = torch.matmul(out_1_norm.T, out_2_norm) / batch_size
-
-        # loss
-        on_diag = torch.diagonal(c).add_(-1).pow_(2).sum()
-        if corr_neg_one is False:
-            # the loss described in the original Barlow Twin's paper
-            # encouraging off_diag to be zero
-            off_diag = off_diagonal(c).pow_(2).sum()
+        loss_hsic=0
+        if args.method == 'barlow':
+            loss = forwardLossBT(out_1, out_2, args.off_goal)
+        elif args.method == 'hsic':
+            loss = forwardLossHSIC(out_1, out_2)
+        elif args.method == 'bt2':
+            loss = forwardLossBT2(out_1, out_2)
+        elif args.method == 'hsic2':
+            loss = forwardLossHSIC2(out_1, out_2)
+        elif args.method == 'bt+hsic2':
+            loss_bt = forwardLossBT(out_1, out_2, args.off_goal)
+            loss_hsic = forwardLossHSIC2(out_1, out_2)
+            loss = loss_bt + loss_hsic * args.lambda_hsic2
+            loss_hsic = loss_hsic.item()
         else:
-            # inspired by HSIC
-            # encouraging off_diag to be negative ones
-            off_diag = off_diagonal(c).add_(1).pow_(2).sum()
-        loss = on_diag + lmbda * off_diag
+            assert False
 
         train_optimizer.zero_grad()
         loss.backward()
@@ -57,13 +135,9 @@ def train(net, data_loader, train_optimizer):
 
         total_num += batch_size
         total_loss += loss.item() * batch_size
-        if corr_neg_one is True:
-            off_corr = -1
-        else:
-            off_corr = 0
         train_bar.set_description(
-            'Train Epoch: [{}/{}] Loss: {:.4f} off_corr:{} lmbda:{:.4f} bsz:{} f_dim:{} dataset: {}'.format( \
-                epoch, epochs, total_loss / total_num, off_corr, lmbda, batch_size, feature_dim, dataset))
+            'Train Epoch: [{}/{}] Loss: {:.4f} off_goal:{} lmbda:{:.4f} bsz:{} loss_hsic:{} dataset: {}'.format( \
+                epoch, epochs, total_loss / total_num, args.off_goal, lmbda, batch_size, loss_hsic, dataset))
     return total_loss / total_num
 
 
@@ -115,6 +189,12 @@ def test(net, memory_data_loader, test_data_loader):
 
 
 if __name__ == '__main__':
+    from local import *
+    import time
+
+    def timetag():
+        return time.strftime("%Y%m%d-%H%-M-%S")
+
     parser = argparse.ArgumentParser(description='Train SimCLR')
     parser.add_argument('--dataset', default='cifar10', type=str, help='Dataset: cifar10 or tiny_imagenet or stl10')
     parser.add_argument('--feature_dim', default=128, type=int, help='Feature dim for latent vector')
@@ -126,9 +206,9 @@ if __name__ == '__main__':
 
     parser.add_argument('--lmbda', default=0.005, type=float,
                         help='Lambda that controls the on- and off-diagonal terms')
-    parser.add_argument('--corr_neg_one', dest='corr_neg_one', action='store_true')
-    parser.add_argument('--corr_zero', dest='corr_neg_one', action='store_false')
-    parser.set_defaults(corr_neg_one=False)
+    parser.add_argument('--off_goal', default=0, type=float)
+    parser.add_argument('-m', '--method', default='barlow', type=str)
+    parser.add_argument('--lambda_hsic2', default=0, type=float)
 
     # args parse
     args = parser.parse_args()
@@ -137,25 +217,24 @@ if __name__ == '__main__':
     batch_size, epochs = args.batch_size, args.epochs
 
     lmbda = args.lmbda
-    corr_neg_one = args.corr_neg_one
 
     # data prepare
     if dataset == 'cifar10':
-        train_data = torchvision.datasets.CIFAR10(root='data', train=True,
+        train_data = torchvision.datasets.CIFAR10(root=data_path, train=True,
                                                   transform=utils.CifarPairTransform(train_transform=True),
                                                   download=True)
-        memory_data = torchvision.datasets.CIFAR10(root='data', train=True,
+        memory_data = torchvision.datasets.CIFAR10(root=data_path, train=True,
                                                    transform=utils.CifarPairTransform(train_transform=False),
                                                    download=True)
-        test_data = torchvision.datasets.CIFAR10(root='data', train=False,
+        test_data = torchvision.datasets.CIFAR10(root=data_path, train=False,
                                                  transform=utils.CifarPairTransform(train_transform=False),
                                                  download=True)
     elif dataset == 'stl10':
-        train_data = torchvision.datasets.STL10(root='data', split="train+unlabeled",
+        train_data = torchvision.datasets.STL10(root=data_path, split="train+unlabeled",
                                                 transform=utils.StlPairTransform(train_transform=True), download=True)
-        memory_data = torchvision.datasets.STL10(root='data', split="train",
+        memory_data = torchvision.datasets.STL10(root=data_path, split="train",
                                                  transform=utils.StlPairTransform(train_transform=False), download=True)
-        test_data = torchvision.datasets.STL10(root='data', split="test",
+        test_data = torchvision.datasets.STL10(root=data_path, split="test",
                                                transform=utils.StlPairTransform(train_transform=False), download=True)
     elif dataset == 'tiny_imagenet':
         train_data = torchvision.datasets.ImageFolder('data/tiny-imagenet-200/train',
@@ -184,12 +263,11 @@ if __name__ == '__main__':
 
     # training loop
     results = {'train_loss': [], 'test_acc@1': [], 'test_acc@5': []}
-    if corr_neg_one is True:
-        corr_neg_one_str = 'neg_corr_'
-    else:
-        corr_neg_one_str = ''
-    save_name_pre = '{}{}_{}_{}_{}'.format(corr_neg_one_str, lmbda, feature_dim, batch_size, dataset)
-
+    # save_name_pre = 'M{}_{}{}_{}_{}_{}_{}'.format(args.method, corr_neg_one_str, lmbda, feature_dim, batch_size, dataset, timetag())
+    save_name_pre = f'M{args.method}_Off{args.off_goal:.2f}'
+    if args.method == 'bt+hsic2':
+        save_name_pre += f'_L{args.lambda_hsic2:.0f}'
+    save_name_pre += f'_{timetag()}'
     if not os.path.exists('results'):
         os.mkdir('results')
     best_acc = 0.0
@@ -202,9 +280,9 @@ if __name__ == '__main__':
             results['test_acc@5'].append(test_acc_5)
             # save statistics
             data_frame = pd.DataFrame(data=results, index=range(5, epoch + 1, 5))
-            data_frame.to_csv('results/{}_statistics.csv'.format(save_name_pre), index_label='epoch')
+            data_frame.to_csv(f'{result_path}/{save_name_pre}_statistics.csv', index_label='epoch')
             if test_acc_1 > best_acc:
                 best_acc = test_acc_1
-                torch.save(model.state_dict(), 'results/{}_model.pth'.format(save_name_pre))
+                torch.save(model.state_dict(), f'{model_path}/{save_name_pre}_model.pth')
         if epoch % 50 == 0:
-            torch.save(model.state_dict(), 'results/{}_model_{}.pth'.format(save_name_pre, epoch))
+            torch.save(model.state_dict(), f'{model_path}/{save_name_pre}_model_{epoch}.pth')

@@ -30,6 +30,9 @@ pip install thop
 
 ### Train and Linear Evaluation using Barlow Twins 
 ```
+CUDA_VISIBLE_DEVICES=3 python main.py --lmbda 0.0078125 --batch_size 128 --feature_dim 128 --dataset cifar10 -m bt2
+CUDA_VISIBLE_DEVICES=0 python main.py --lmbda 0.0078125 --batch_size 128 --feature_dim 128 --dataset cifar10 -m bt+hsic2 --lambda_hsic2 1
+
 python main.py --lmbda 0.0078125 --corr_zero --batch_size 128 --feature_dim 128 --dataset cifar10
 python linear.py --dataset cifar10 --model_path results/0.0078125_128_128_cifar10_model.pth
 ```
