@@ -23,8 +23,8 @@ def off_diagonal(x):
 def forwardLossBT(out_1, out_2, off_goal):
     # Barlow Twins
     # normalize the representations along the batch dimension
-    out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0)  # seems unbiased is better
-    out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0)
+    out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0,unbiased=False)
+    out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0,unbiased=False)
     batch_size = len(out_1_norm)
 
     # cross-correlation matrix
