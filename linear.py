@@ -56,31 +56,33 @@ def train_val(net, data_loader, train_optimizer):
             data_bar.set_description('{} Epoch: [{}/{}] Loss: {:.4f} ACC@1: {:.2f}% ACC@5: {:.2f}% model: {}'
                                      .format('Train' if is_train else 'Test', epoch, epochs, total_loss / total_num,
                                              total_correct_1 / total_num * 100, total_correct_5 / total_num * 100,
-                                             model_path.split('/')[-1]))
+                                             model_fn.split('/')[-1]))
 
     return total_loss / total_num, total_correct_1 / total_num * 100, total_correct_5 / total_num * 100
 
 
 if __name__ == '__main__':
+    from local import *
     parser = argparse.ArgumentParser(description='Linear Evaluation')
     parser.add_argument('--dataset', default='cifar10', type=str, help='Dataset: cifar10 or tiny_imagenet or stl10')
-    parser.add_argument('--model_path', type=str, default='results/Barlow_Twins/0.005_64_128_model.pth',
+    parser.add_argument('--ckpt_name', type=str, default='0.005_64_128_model',
                         help='The base string of the pretrained model path')
     parser.add_argument('--batch_size', type=int, default=512, help='Number of images in each mini-batch')
     parser.add_argument('--epochs', type=int, default=200, help='Number of sweeps over the dataset to train')
 
     args = parser.parse_args()
-    model_path, batch_size, epochs = args.model_path, args.batch_size, args.epochs
+    model_fn, batch_size, epochs = args.ckpt_name, args.batch_size, args.epochs
+    model_fn = f'{model_path}/{model_fn}.pth'
     dataset = args.dataset
     if dataset == 'cifar10':
-        train_data = CIFAR10(root='data', train=True,\
+        train_data = CIFAR10(root=data_path, train=True,\
             transform=utils.CifarPairTransform(train_transform = True, pair_transform=False), download=True)
-        test_data = CIFAR10(root='data', train=False,\
+        test_data = CIFAR10(root=data_path, train=False,\
             transform=utils.CifarPairTransform(train_transform = False, pair_transform=False), download=True)
     elif dataset == 'stl10':
-        train_data =  torchvision.datasets.STL10(root='data', split="train", \
+        train_data =  torchvision.datasets.STL10(root=data_path, split="train", \
             transform=utils.StlPairTransform(train_transform = True, pair_transform=False), download=True)
-        test_data =  torchvision.datasets.STL10(root='data', split="test", \
+        test_data =  torchvision.datasets.STL10(root=data_path, split="test", \
             transform=utils.StlPairTransform(train_transform = False, pair_transform=False), download=True)
     elif dataset == 'tiny_imagenet':
         train_data = torchvision.datasets.ImageFolder('data/tiny-imagenet-200/train', \
@@ -91,7 +93,7 @@ if __name__ == '__main__':
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=16, pin_memory=True)
     test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True)
 
-    model = Net(num_class=len(train_data.classes), pretrained_path=model_path, dataset=dataset).cuda()
+    model = Net(num_class=len(train_data.classes), pretrained_path=model_fn, dataset=dataset).cuda()
     for param in model.f.parameters():
         param.requires_grad = False
 
@@ -106,7 +108,9 @@ if __name__ == '__main__':
     results = {'train_loss': [], 'train_acc@1': [], 'train_acc@5': [],
                'test_loss': [], 'test_acc@1': [], 'test_acc@5': []}
 
-    save_name = model_path.split('.pth')[0] + '_linear.csv'
+    linear_folder = f'{result_path}/linear'
+    os.system(f'mkdir -p {linear_folder}')
+    save_name = f'{result_path}/linear/{args.ckpt_name}_linear.csv'
 
     best_acc = 0.0
     for epoch in range(1, epochs + 1):
