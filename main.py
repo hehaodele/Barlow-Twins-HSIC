@@ -72,35 +72,78 @@ def calcHSIC(out_1_norm, out_2_norm):
     HSIC = torch.trace(torch.matmul(torch.matmul(K,H),torch.matmul(L,H))) / (n*n)
     return HSIC
 
+def calcHSIC_new(x, y):
+    """
+    :param x: B x D_1
+    :param y: B x D_2
+    :return:
+    """
+    def get_dists(x, y):
+        d = (x[:,None,:] - y[None,:,:]).pow(2).sum(-1)
+        return d
+
+    def get_dists_med(d):
+        doff = torch.triu(d.detach(),diagonal=1)
+        doff = doff[doff > 0]
+        if len(doff) == 0:
+            return 1.0
+        else:
+            return torch.median(doff)
+
+    K = get_dists(x, x)
+    Kmed = get_dists_med(K)
+    K = torch.exp(-K / Kmed)
+
+    L = get_dists(y, y)
+    Lmed = get_dists_med(L)
+    L = torch.exp(-L / Lmed)
+
+    n = len(K)
+    H = torch.eye(n).to(K.dtype).to(K.device) - torch.ones_like(K) / n
+    HSIC = torch.trace(torch.matmul(torch.matmul(K,H),torch.matmul(L,H))) / (n*n)
+    return HSIC
+
+
+
 def forwardLossHSIC(out_1, out_2):
     out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0)  # seems unbiased is better
     out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0)
     loss = -calcHSIC(out_1_norm, out_2_norm)
     return loss
 
-def forwardLossHSIC2(out_1, out_2):
-    out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0)  # seems unbiased is better
-    out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0)
-
-    # loss_align = (out_1_norm * out_2_norm).mean(0).add_(-1).pow(2).mean() # (cii - 1)^2
-
+def forwardLossHSIC2(out_1, out_2, normalize=True):
+    if normalize:
+        out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0)  # seems unbiased is better
+        out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0)
+    else:
+        out_1_norm, out_2_norm = out_1, out_2
     mask_1 = torch.rand_like(out_1_norm[0]) > 0.5
     mask_2 = torch.rand_like(out_2_norm[0]) > 0.5
     mask_1[0] = True
     mask_1[-1] = False
     mask_2[0] = True
     mask_2[-1] = False
-
     hsic_1 = calcHSIC(out_1_norm[:,mask_1], out_1_norm[:,~mask_1])
     hsic_2 = calcHSIC(out_2_norm[:, mask_1], out_2_norm[:, ~mask_1])
-
     loss_uniform = 0.5 * (hsic_1 + hsic_2)
-
-    # print('align', loss_align, 'uniform', loss_uniform)
-    # loss = loss_align + loss_uniform * 10
     return loss_uniform
 
-
+def forwardLossHSIC_new(out_1, out_2, normalize=True):
+    if normalize:
+        out_1_norm = (out_1 - out_1.mean(dim=0)) / out_1.std(dim=0)  # seems unbiased is better
+        out_2_norm = (out_2 - out_2.mean(dim=0)) / out_2.std(dim=0)
+    else:
+        out_1_norm, out_2_norm = out_1, out_2
+    mask_1 = torch.rand_like(out_1_norm[0]) > 0.5
+    mask_2 = torch.rand_like(out_2_norm[0]) > 0.5
+    mask_1[0] = True
+    mask_1[-1] = False
+    mask_2[0] = True
+    mask_2[-1] = False
+    hsic_1 = calcHSIC(out_1_norm[:,mask_1], out_1_norm[:,~mask_1])
+    hsic_2 = calcHSIC(out_2_norm[:, mask_1], out_2_norm[:, ~mask_1])
+    loss = 0.5 * (hsic_1 + hsic_2)
+    return loss
 
 # train for one epoch to learn unique features
 def train(net, data_loader, train_optimizer):
@@ -124,7 +167,17 @@ def train(net, data_loader, train_optimizer):
         elif args.method == 'bt+hsic2':
             loss_bt = forwardLossBT(out_1, out_2, args.off_goal)
             loss_hsic = forwardLossHSIC2(out_1, out_2)
-            loss = loss_bt + loss_hsic * args.lambda_hsic2
+            loss = loss_bt + loss_hsic * args.lambda_hsic
+            loss_hsic = loss_hsic.item()
+        elif args.method == 'btHistNewOut':
+            loss_bt = forwardLossBT(out_1, out_2, args.off_goal)
+            loss_hsic = forwardLossHSIC_new(out_1, out_2, normalize=True)
+            loss = loss_bt + loss_hsic * args.lambda_hsic
+            loss_hsic = loss_hsic.item()
+        elif args.method == 'btHistNewFea':
+            loss_bt = forwardLossBT(out_1, out_2, args.off_goal)
+            loss_hsic = forwardLossHSIC_new(feature_1, feature_2, normalize=True)
+            loss = loss_bt + loss_hsic * args.lambda_hsic
             loss_hsic = loss_hsic.item()
         else:
             assert False
@@ -208,7 +261,7 @@ if __name__ == '__main__':
                         help='Lambda that controls the on- and off-diagonal terms')
     parser.add_argument('--off_goal', default=0, type=float)
     parser.add_argument('-m', '--method', default='barlow', type=str)
-    parser.add_argument('--lambda_hsic2', default=0, type=float)
+    parser.add_argument('--lambda_hsic', default=0, type=float)
 
     # args parse
     args = parser.parse_args()
@@ -264,10 +317,15 @@ if __name__ == '__main__':
     # training loop
     results = {'train_loss': [], 'test_acc@1': [], 'test_acc@5': []}
     # save_name_pre = 'M{}_{}{}_{}_{}_{}_{}'.format(args.method, corr_neg_one_str, lmbda, feature_dim, batch_size, dataset, timetag())
-    save_name_pre = f'M{args.method}_Off{args.off_goal:.2f}'
-    if args.method == 'bt+hsic2':
-        save_name_pre += f'_L{args.lambda_hsic2:.0f}'
+    save_name_pre = f'M{args.method}'
+    if args.off_goal > 0:
+        save_name_pre += f'_Off{args.off_goal:.2f}'
+    if args.lambda_hsic > 0:
+        save_name_pre += f'_L{args.lambda_hsic:.0f}'
     save_name_pre += f'_{timetag()}'
+
+    print(f'===> Start: {save_name_pre}.')
+
     if not os.path.exists('results'):
         os.mkdir('results')
     best_acc = 0.0
